@@ -1,0 +1,49 @@
+version: '3'
+
+vars:
+  BENCHMARKER_DIR: ./benchmarker
+  WEBAPP_DIR: ./webapp
+
+  NGINX_LOG: ./webapp/etc/nginx/log/access.log
+  MYSQL_SLOW_LOG: ./webapp/etc/mysql/log/slow.log
+
+tasks:
+  install:
+    desc: Install ISUCON profiling tools
+    cmds:
+      - |
+        curl -fL \
+          "https://github.com/tkuchiki/alp/releases/download/v{{.ALP_VERSION}}/alp_linux_amd64.tar.gz" \
+          -o /tmp/alp.tar.gz
+        tar -xzf /tmp/alp.tar.gz -C /tmp
+        sudo install -m 0755 /tmp/alp /usr/local/bin/alp
+        rm -f /tmp/alp.tar.gz /tmp/alp
+
+      - sudo apt-get update
+      - sudo apt-get install -y percona-toolkit
+
+  check:
+    desc: Check installed profiling tools
+    cmds:
+      - alp --version
+      - pt-query-digest --version
+      - jq --version
+
+  bench:
+    desc: Run benchmark
+    dir: '{{.BENCHMARKER_DIR}}'
+    cmds:
+      - ./bin/benchmarker -t "http://localhost:80" -u ./userdata
+
+  analyze:
+    desc: Analyze Nginx access log and MySQL slow query log
+    cmds:
+      - |
+        echo "===== ALP ====="
+        sudo alp ltsv --sort sum -r json \
+          --matching-groups="/posts/[0-9]+,/image/\\d+,/@\\w+" \
+          --file "{{.NGINX_LOG}}"
+
+        echo
+        echo "===== pt-query-digest ====="
+        sudo pt-query-digest "{{.MYSQL_SLOW_LOG}}"
