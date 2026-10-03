@@ -3,6 +3,7 @@ version: '3'
 vars:
   BENCHMARKER_DIR: ./benchmarker
   WEBAPP_DIR: ./webapp
+  COMPOSE_FILE: ./webapp/compose.yml
 
   NGINX_LOG: ./webapp/etc/nginx/log/access.log
   MYSQL_SLOW_LOG: ./webapp/etc/mysql/log/slow.log
@@ -36,14 +37,49 @@ tasks:
       - ./bin/benchmarker -t "http://localhost:80" -u ./userdata
 
   analyze:
-    desc: Analyze Nginx access log and MySQL slow query log
+    desc: Analyze and rotate logs
+    vars:
+      TIMESTAMP:
+        sh: date +%Y%m%d-%H%M%S
     cmds:
+      # ログ保存先
+      - mkdir -p ./log/nginx ./log/mysql
+
+      # Nginx
       - |
         echo "===== ALP ====="
-        sudo alp ltsv --sort sum -r json \
+        sudo alp ltsv \
+          --sort sum \
+          -r json \
           --matching-groups="/posts/[0-9]+,/image/\\d+,/@\\w+" \
-          --file "{{.NGINX_LOG}}"
+          --file "{{.NGINX_LOG}}" \
+          | tee "./log/nginx/alp_{{.TIMESTAMP}}.txt"
 
+      # MySQL
+      - |
         echo
         echo "===== pt-query-digest ====="
-        sudo pt-query-digest "{{.MYSQL_SLOW_LOG}}"
+        sudo pt-query-digest "{{.MYSQL_SLOW_LOG}}" \
+          | tee "./log/mysql/digest_{{.TIMESTAMP}}.txt"
+
+      # Nginx log rotation
+      - |
+        echo
+        echo "===== Rotate Nginx log ====="
+        sudo touch "{{.NGINX_LOG}}"
+        sudo chown 101:101 "{{.NGINX_LOG}}" || true
+        docker compose -f "{{.COMPOSE_FILE}}" exec nginx nginx -s reopen
+        sudo mv "{{.NGINX_LOG}}" \
+          "./webapp/etc/nginx/log/{{.TIMESTAMP}}_access.log"
+
+      # MySQL log rotation
+      - |
+        echo
+        echo "===== Rotate MySQL slow log ====="
+        docker compose -f "{{.COMPOSE_FILE}}" exec mysql mysqladmin \
+          -uroot -proot flush-logs
+
+  connect-mysql:
+    desc: Connect to MySQL
+    cmds:
+      - mysql -h127.0.0.1 -uroot -proot -P3306 isuconp
