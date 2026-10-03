@@ -5,9 +5,10 @@ services:
     depends_on:
       - app
     volumes:
+      - ./etc/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./etc/nginx/conf.d:/etc/nginx/conf.d
       - ./public:/public
-      - ./logs/nginx:/var/log/nginx
+      - ./etc/nginx/log:/var/log/nginx
     ports:
       - "80:80"
     networks:
