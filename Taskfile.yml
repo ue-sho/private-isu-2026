@@ -1,0 +1,85 @@
+version: '3'
+
+vars:
+  BENCHMARKER_DIR: ./benchmarker
+  WEBAPP_DIR: ./webapp
+  COMPOSE_FILE: ./webapp/compose.yml
+
+  NGINX_LOG: ./webapp/etc/nginx/log/access.log
+  MYSQL_SLOW_LOG: ./webapp/etc/mysql/log/slow.log
+
+tasks:
+  install:
+    desc: Install ISUCON profiling tools
+    cmds:
+      - |
+        curl -fL \
+          "https://github.com/tkuchiki/alp/releases/download/v{{.ALP_VERSION}}/alp_linux_amd64.tar.gz" \
+          -o /tmp/alp.tar.gz
+        tar -xzf /tmp/alp.tar.gz -C /tmp
+        sudo install -m 0755 /tmp/alp /usr/local/bin/alp
+        rm -f /tmp/alp.tar.gz /tmp/alp
+
+      - sudo apt-get update
+      - sudo apt-get install -y percona-toolkit
+
+  check:
+    desc: Check installed profiling tools
+    cmds:
+      - alp --version
+      - pt-query-digest --version
+      - jq --version
+
+  bench:
+    desc: Run benchmark
+    dir: '{{.BENCHMARKER_DIR}}'
+    cmds:
+      - ./bin/benchmarker -t "http://localhost:80" -u ./userdata
+
+  analyze:
+    desc: Analyze and rotate logs
+    vars:
+      TIMESTAMP:
+        sh: date +%Y%m%d-%H%M%S
+    cmds:
+      # ログ保存先
+      - mkdir -p ./log/nginx ./log/mysql
+
+      # Nginx
+      - |
+        echo "===== ALP ====="
+        sudo alp ltsv \
+          --sort sum \
+          -r json \
+          --matching-groups="/posts/[0-9]+,/image/\\d+,/@\\w+" \
+          --file "{{.NGINX_LOG}}" \
+          | tee "./log/nginx/alp_{{.TIMESTAMP}}.txt"
+
+      # MySQL
+      - |
+        echo
+        echo "===== pt-query-digest ====="
+        sudo pt-query-digest "{{.MYSQL_SLOW_LOG}}" \
+          | tee "./log/mysql/digest_{{.TIMESTAMP}}.txt"
+
+      # Nginx log rotation
+      - |
+        echo
+        echo "===== Rotate Nginx log ====="
+        sudo touch "{{.NGINX_LOG}}"
+        sudo chown 101:101 "{{.NGINX_LOG}}" || true
+        docker compose -f "{{.COMPOSE_FILE}}" exec nginx nginx -s reopen
+        sudo mv "{{.NGINX_LOG}}" \
+          "./webapp/etc/nginx/log/{{.TIMESTAMP}}_access.log"
+
+      # MySQL log rotation
+      - |
+        echo
+        echo "===== Rotate MySQL slow log ====="
+        docker compose -f "{{.COMPOSE_FILE}}" exec mysql mysqladmin \
+          -uroot -proot flush-logs
+
+  connect-mysql:
+    desc: Connect to MySQL
+    cmds:
+      - mysql -h127.0.0.1 -uroot -proot -P3306 isuconp

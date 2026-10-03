@@ -19,3 +19,4 @@ portal/tmp
 
 /webapp/etc/mysql/log/*.log
 /webapp/etc/nginx/log/*.log
+/log/*
