@@ -76,8 +76,11 @@ tasks:
       - |
         echo
         echo "===== Rotate MySQL slow log ====="
+        sudo mv "{{.MYSQL_SLOW_LOG}}" \
+          "./webapp/etc/mysql/log/{{.TIMESTAMP}}_slow.log"
         docker compose -f "{{.COMPOSE_FILE}}" exec mysql mysqladmin \
           -uroot -proot flush-logs
+        sudo chmod 755 "{{.MYSQL_SLOW_LOG}}" || true
 
   connect-mysql:
     desc: Connect to MySQL
