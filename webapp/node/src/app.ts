@@ -72,8 +72,22 @@ interface CountRow {
   count: number
 }
 
+interface PostCommentRow extends RowDataPacket {
+  id: number
+  post_id: number
+  user_id: number
+  comment: string
+  created_at: Date
+  comment_count: number
+}
+
 interface IdRow {
   id: number
+}
+
+interface PostComments {
+  comments: Comment[]
+  count: number
 }
 
 interface SessionData {
@@ -320,6 +334,44 @@ async function getSessionUser(c: AppContext): Promise<User | undefined> {
   return user
 }
 
+async function getPostComments(postIds: number[]): Promise<Map<number, PostComments>> {
+  const result = new Map<number, PostComments>()
+  if (postIds.length === 0) return result
+
+  const [rows] = await db.query<PostCommentRow[]>(
+    'WITH ranked_comments AS ('
+    + 'SELECT `id`, `post_id`, `user_id`, `comment`, `created_at`, '
+    + 'COUNT(*) OVER (PARTITION BY `post_id`) AS `comment_count`, '
+    + 'ROW_NUMBER() OVER (PARTITION BY `post_id` ORDER BY `created_at` DESC) AS `comment_rank` '
+    + 'FROM `comments` WHERE `post_id` IN (?)'
+    + ') '
+    + 'SELECT `id`, `post_id`, `user_id`, `comment`, `created_at`, `comment_count` '
+    + 'FROM ranked_comments WHERE `comment_rank` <= 3 '
+    + 'ORDER BY `post_id`, `created_at` DESC',
+    [postIds]
+  )
+
+  for (const row of rows) {
+    let postComments = result.get(row.post_id)
+    if (!postComments) {
+      postComments = { comments: [], count: row.comment_count }
+      result.set(row.post_id, postComments)
+    }
+    postComments.comments.push({
+      id: row.id,
+      post_id: row.post_id,
+      user_id: row.user_id,
+      comment: row.comment,
+      created_at: row.created_at
+    })
+  }
+
+  for (const postComments of result.values()) {
+    postComments.comments.reverse()
+  }
+  return result
+}
+
 function ensureString(value: ParsedBodyValue): string {
   if (typeof value === 'string') return value
   if (Array.isArray(value)) {
@@ -431,20 +483,18 @@ app.get('/', async (c: AppContext) => {
     const [postUsers] = await db.query<RowDataPacket[]>(
       'SELECT p.`id`, p.`user_id`, p.`body`, p.`created_at` as post_created_at, p.`mime`, '
       + 'u.`account_name`, u.`passhash`, u.`authority`, u.`del_flg`, u.`created_at`as user_created_at '
-      + 'FROM `posts`as p '
-      + 'LEFT JOIN `users` as u '
+      + 'FROM `posts` AS p '
+      + 'STRAIGHT_JOIN `users` AS u '
       + 'ON p.`user_id` = u.`id` '
       + 'WHERE u.`del_flg` = 0 '
       + 'ORDER BY p.`created_at` DESC '
       + 'LIMIT 20'
     )
 
-    let enriched: Post[] = []
+    const postComments = await getPostComments(postUsers.map((row) => row.id))
+    const enriched: Post[] = []
     for (const row of postUsers) {
-      const [[commentRows], [[commentCount]]] = await Promise.all([
-        db.query<RowDataPacket[]>('SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC LIMIT 3', [row.id]),
-        db.query<RowDataPacket[]>('SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?', [row.id])
-      ])
+      const comments = postComments.get(row.id)
 
       const user: User = {
         id: row.user_id,
@@ -462,14 +512,8 @@ app.get('/', async (c: AppContext) => {
         body: row.body,
         mime: row.mime,
         created_at: row.post_created_at,
-        comment_count: (commentCount as CountRow | undefined)?.count || 0,
-        comments: commentRows.map((commentRow) => {
-          const comment = commentRow as Comment
-          return {
-            ...comment,
-              user: user
-          }
-        }).reverse(),
+        comment_count: comments?.count ?? 0,
+        comments: (comments?.comments ?? []).map((comment) => ({ ...comment, user })),
         user: user
       }
       enriched.push(post)
@@ -489,12 +533,10 @@ app.get('/:accountName{@[A-Za-z0-9_]+}', async (c: AppContext) => {
     if (!user) return c.text('not_found', 404)
 
     const [postRowData] = await db.query<RowDataPacket[]>('SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC LIMIT 20', [user.id])
-    let posts: Post[] = []
+    const postComments = await getPostComments((postRowData as Post[]).map((row) => row.id))
+    const posts: Post[] = []
     for (const row of postRowData as Post[]) {
-      const [[commentRows], [[commentCount]]] = await Promise.all([
-        db.query<RowDataPacket[]>('SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC LIMIT 3', [row.id]),
-        db.query<RowDataPacket[]>('SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?', [row.id])
-      ])
+      const comments = postComments.get(row.id)
 
       const post: Post = {
         id: row.id,
@@ -503,14 +545,8 @@ app.get('/:accountName{@[A-Za-z0-9_]+}', async (c: AppContext) => {
         body: row.body,
         mime: row.mime,
         created_at: row.created_at,
-        comment_count: (commentCount as CountRow | undefined)?.count || 0,
-        comments: commentRows.map((commentRow) => {
-          const comment = commentRow as Comment
-          return {
-            ...comment,
-            user: user
-          }
-        }).reverse(),
+        comment_count: comments?.count ?? 0,
+        comments: (comments?.comments ?? []).map((comment) => ({ ...comment, user })),
         user: user
       }
       posts.push(post)
@@ -549,20 +585,18 @@ app.get('/posts', async (c: AppContext) => {
   const [postUsers] = await db.query<RowDataPacket[]>(
     'SELECT p.`id`, p.`user_id`, p.`body`, p.`created_at` as post_created_at, p.`mime`, '
     + 'u.`account_name`, u.`passhash`, u.`authority`, u.`del_flg`, u.`created_at`as user_created_at '
-    + 'FROM `posts`as p '
-    + 'LEFT JOIN `users` as u '
+    + 'FROM `posts` AS p '
+    + 'STRAIGHT_JOIN `users` AS u '
     + 'ON p.`user_id` = u.`id` '
     + 'WHERE u.`del_flg` = 0 '
     + 'AND p.`created_at` <= ? ORDER BY p.`created_at` DESC '
     + 'LIMIT 20'
   , [maxCreatedAt])
 
-  let enriched: Post[] = []
+  const postComments = await getPostComments(postUsers.map((row) => row.id))
+  const enriched: Post[] = []
   for (const row of postUsers) {
-    const [[commentRows], [[commentCount]]] = await Promise.all([
-      db.query<RowDataPacket[]>('SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC LIMIT 3', [row.id]),
-      db.query<RowDataPacket[]>('SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?', [row.id])
-    ])
+    const comments = postComments.get(row.id)
 
     const user: User = {
       id: row.user_id,
@@ -580,14 +614,8 @@ app.get('/posts', async (c: AppContext) => {
       body: row.body,
       mime: row.mime,
       created_at: row.post_created_at,
-      comment_count: (commentCount as CountRow | undefined)?.count || 0,
-      comments: commentRows.map((commentRow) => {
-        const comment = commentRow as Comment
-        return {
-          ...comment,
-          user: user
-        }
-      }).reverse(),
+      comment_count: comments?.count ?? 0,
+      comments: (comments?.comments ?? []).map((comment) => ({ ...comment, user })),
       user: user
     }
     enriched.push(post)
@@ -614,10 +642,8 @@ app.get('/posts/:id', async (c: AppContext) => {
   const postUser = postUsers[0]
   if (!postUser) return c.text('not found', 404)
 
-  const [[commentRows], [[commentCount]]] = await Promise.all([
-    db.query<RowDataPacket[]>('SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC LIMIT 3', [postUser.id]),
-    db.query<RowDataPacket[]>('SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?', [postUser.id])
-  ])
+  const postComments = await getPostComments([postUser.id])
+  const comments = postComments.get(postUser.id)
 
   const user: User = {
     id: postUser.user_id,
@@ -636,14 +662,8 @@ app.get('/posts/:id', async (c: AppContext) => {
     body: postUser.body,
     mime: postUser.mime,
     created_at: postUser.post_created_at,
-    comment_count: (commentCount as CountRow | undefined)?.count || 0,
-    comments: commentRows.map((commentRow) => {
-      const comment = commentRow as Comment
-      return {
-        ...comment,
-        user: user
-      }
-    }).reverse(),
+    comment_count: comments?.count ?? 0,
+    comments: (comments?.comments ?? []).map((comment) => ({ ...comment, user })),
     user: user
   }
 
