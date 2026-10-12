@@ -33,7 +33,7 @@ const db: Pool = createPool({
   user: process.env.ISUCONP_DB_USER || 'root',
   password: process.env.ISUCONP_DB_PASSWORD,
   database: process.env.ISUCONP_DB_NAME || 'isuconp',
-  connectionLimit: 1,
+  connectionLimit: 10,
   charset: 'utf8mb4'
 })
 
@@ -321,7 +321,7 @@ async function render(c: AppContext, view: string, params: RenderParams): Promis
   const session = c.get('session') as SessionData
   const messages = { notice: session.flashNotice }
   session.flashNotice = undefined
-  const html = await ejs.renderFile(path.join(__dirname, '../views', view), { ...params, messages, formatBody })
+  const html = await ejs.renderFile(path.join(__dirname, '../views', view), { ...params, messages, formatBody }, { cache: true })
   return c.html(html)
 }
 
@@ -692,13 +692,12 @@ app.post('/', async (c: AppContext) => {
     return c.redirect('/')
   }
   const buffer = Buffer.from(await file.arrayBuffer())
-  const [result] = await db.query<ResultSetHeader>('INSERT INTO `posts` (`user_id`, `mime`, `imgdata`, `body`) VALUES (?,?,?,?)', [me.id, mime, buffer, ensureString(body.body)])
+  const [result] = await db.query<ResultSetHeader>('INSERT INTO `posts` (`user_id`, `mime`, `imgdata`, `body`) VALUES (?,?,?,?)', [me.id, mime, Buffer.alloc(0), ensureString(body.body)])
   const insertId = result.insertId
 
   try {
     await writeImage(insertId, mime, buffer)
   } catch (e) {
-    // The DB image route still works when the file cannot be saved.
     console.error('image file write failed', e)
   }
 
