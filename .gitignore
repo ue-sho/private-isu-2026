@@ -20,3 +20,6 @@ portal/tmp
 /webapp/etc/mysql/log/*.log
 /webapp/etc/nginx/log/*.log
 /log/*
+
+# Generated image files (the database remains the source of truth)
+/webapp/public/image/
