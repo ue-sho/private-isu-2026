@@ -631,8 +631,8 @@ app.get('/posts/:id', async (c: AppContext) => {
   const [postUsers] = await db.query<RowDataPacket[]>(
     'SELECT p.`id`, p.`user_id`, p.`body`, p.`created_at` as post_created_at, p.`mime`, '
     + 'u.`account_name`, u.`passhash`, u.`authority`, u.`del_flg`, u.`created_at`as user_created_at '
-    + 'FROM `posts`as p '
-    + 'LEFT JOIN `users` as u '
+    + 'FROM `posts` AS p '
+    + 'STRAIGHT_JOIN `users` AS u '
     + 'ON p.`user_id` = u.`id` '
     + 'WHERE u.`del_flg` = 0 AND p.`id` = ? '
     + 'ORDER BY p.`created_at` DESC '
