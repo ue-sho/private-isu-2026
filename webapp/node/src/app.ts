@@ -40,7 +40,7 @@ const db: Pool = createPool({
 interface User {
   id: number
   account_name: string
-  posts: string
+  passhash: string
   authority: number
   del_flg: number
   created_at: Date
@@ -248,7 +248,7 @@ async function tryLogin(accountName: string, password: string): Promise<User | u
   const user = rows[0] as User
   if (!user) return undefined
   const passhash = calculatePasshash(accountName, password)
-  if (passhash === user.posts) return user
+  if (passhash === user.passhash) return user
   return undefined
 }
 
@@ -462,7 +462,7 @@ app.get('/', async (c: AppContext) => {
       const user: User = {
         id: row.user_id,
         account_name: row.account_name,
-        posts: row.passhash,
+        passhash: row.passhash,
         authority: row.authority,
         del_flg: row.del_flg,
         created_at: row.user_created_at
@@ -580,7 +580,7 @@ app.get('/posts', async (c: AppContext) => {
     const user: User = {
       id: row.user_id,
       account_name: row.account_name,
-      posts: row.passhash,
+      passhash: row.passhash,
       authority: row.authority,
       del_flg: row.del_flg,
       created_at: row.user_created_at
@@ -635,7 +635,7 @@ app.get('/posts/:id', async (c: AppContext) => {
   const user: User = {
     id: postUser.user_id,
     account_name: postUser.account_name,
-    posts: postUser.passhash,
+    passhash: postUser.passhash,
     authority: postUser.authority,
     del_flg: postUser.del_flg,
     created_at: postUser.user_created_at
